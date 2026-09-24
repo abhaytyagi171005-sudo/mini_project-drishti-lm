@@ -2,16 +2,6 @@ import React, { useState } from 'react';
 import { Image as ImageIcon, Trash2, RefreshCw, CheckCircle2, ZoomIn } from 'lucide-react';
 import ImageZoomModal from './ImageZoomModal';
 
-// Color per field for the overlay boxes
-const FIELD_COLORS = {
-  manufacturer: '#10b981',
-  quantity: '#3b82f6',
-  mrp: '#eab308',
-  dates: '#a855f7',
-  consumer_care: '#f97316',
-  country_of_origin: '#ef4444',
-};
-
 const FIELD_LABELS = {
   manufacturer: 'Manufacturer',
   quantity: 'Net Quantity',
@@ -40,17 +30,20 @@ export default function ImagePreviewCard({
   const imgW = imageMetadata?.width || 900;
   const imgH = imageMetadata?.height || 900;
 
-  // Collect bboxes present in the product data
-  const boxes = [];
+  // Fields that have a bbox available
+  const availableFields = [];
   if (product) {
     ['manufacturer', 'quantity', 'mrp', 'dates', 'consumer_care'].forEach((key) => {
       const bbox = product[key]?.bbox;
       if (Array.isArray(bbox) && bbox.length === 4) {
-        boxes.push({ field: key, bbox, color: FIELD_COLORS[key] });
+        availableFields.push({ field: key, bbox });
       }
     });
   }
-  const hasBoxes = boxes.length > 0;
+  const hasBoxes = availableFields.length > 0;
+
+  // Only render the bbox for the currently highlighted field
+  const activeBox = availableFields.find((b) => b.field === highlightedField);
 
   return (
     <>
@@ -88,7 +81,7 @@ export default function ImagePreviewCard({
           <div className="w-full md:w-64 shrink-0">
             <button
               onClick={() => setIsZoomOpen(true)}
-              className="relative block w-full bg-slate-900 rounded-lg overflow-hidden border border-slate-200 cursor-zoom-in group"
+              className="relative block w-full bg-slate-900 rounded-lg overflow-hidden border border-slate-200 cursor-zoom-in"
               style={{ aspectRatio: `${imgW} / ${imgH}` }}
               title="Click to expand and inspect declarations"
             >
@@ -98,44 +91,39 @@ export default function ImagePreviewCard({
                 className="absolute inset-0 w-full h-full object-fill"
               />
 
-              {/* Hover overlay hint */}
-              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-all flex items-center justify-center opacity-0 group-hover:opacity-100">
-                <span className="flex items-center gap-1.5 text-white text-xs font-bold bg-black/70 px-3 py-1.5 rounded-full">
-                  <ZoomIn size={14} />
-                  Click to expand
-                </span>
-              </div>
-
-              {/* Tiny preview of boxes if any exist */}
-              {hasBoxes && (
+              {/* Only the currently active box — thin black border, no fill */}
+              {activeBox && (
                 <svg
                   className="absolute inset-0 w-full h-full pointer-events-none"
                   viewBox={`0 0 ${imgW} ${imgH}`}
                   preserveAspectRatio="none"
                 >
-                  {boxes.map(({ field, bbox, color }) => {
-                    const [x1, y1, x2, y2] = bbox;
-                    return (
-                      <rect
-                        key={field}
-                        x={x1}
-                        y={y1}
-                        width={Math.max(1, x2 - x1)}
-                        height={Math.max(1, y2 - y1)}
-                        stroke={color}
-                        strokeWidth={3}
-                        fill="transparent"
-                        opacity={0.75}
-                      />
-                    );
-                  })}
+                  <rect
+                    x={activeBox.bbox[0]}
+                    y={activeBox.bbox[1]}
+                    width={Math.max(1, activeBox.bbox[2] - activeBox.bbox[0])}
+                    height={Math.max(1, activeBox.bbox[3] - activeBox.bbox[1])}
+                    stroke="#000"
+                    strokeWidth={2}
+                    fill="none"
+                    rx={2}
+                    ry={2}
+                  />
                 </svg>
               )}
+
+              {/* Discreet expand hint */}
+              <div className="absolute bottom-1.5 right-1.5 bg-black/60 text-white text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1">
+                <ZoomIn size={11} />
+                expand
+              </div>
             </button>
 
             {hasBoxes && (
               <div className="text-[10px] text-slate-500 text-center mt-2">
-                {boxes.length} declaration{boxes.length === 1 ? '' : 's'} located — click image to inspect
+                {highlightedField
+                  ? `Showing: ${FIELD_LABELS[highlightedField]}`
+                  : 'Click a chip below to locate a declaration'}
               </div>
             )}
           </div>
@@ -180,20 +168,19 @@ export default function ImagePreviewCard({
               </div>
             </div>
 
-            {/* Legend chips */}
+            {/* Field chips — clicking toggles the box on/off */}
             {hasBoxes && (
               <div className="flex flex-wrap gap-2 text-[10px] pt-1">
-                {boxes.map(({ field, color }) => (
+                {availableFields.map(({ field }) => (
                   <button
                     key={field}
                     onClick={() => onBoxClick && onBoxClick(field)}
-                    className={`flex items-center gap-1 px-2 py-0.5 rounded-full border transition-all ${
+                    className={`flex items-center gap-1 px-2 py-1 rounded-full border transition-all ${
                       highlightedField === field
                         ? 'bg-slate-900 text-white border-slate-900 font-bold'
                         : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
                     }`}
                   >
-                    <span className="w-2 h-2 rounded-full" style={{ background: color }} />
                     {FIELD_LABELS[field]}
                   </button>
                 ))}
