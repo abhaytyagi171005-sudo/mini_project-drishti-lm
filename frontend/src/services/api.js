@@ -2,8 +2,9 @@
  * API Service for communicating with the FastAPI Legal Metrology Backend.
  */
 
-const API_BASE = '/api';
-
+const API_BASE = import.meta.env.VITE_API_URL
+  ? `${import.meta.env.VITE_API_URL}/api`
+  : '/api';
 export async function analyzePackage(imageFile, category = 'Auto Detect', demoSampleId = null) {
   const formData = new FormData();
   if (imageFile) {
