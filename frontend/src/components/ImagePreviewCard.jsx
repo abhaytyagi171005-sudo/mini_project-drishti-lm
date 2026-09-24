@@ -24,9 +24,9 @@ export default function ImagePreviewCard({
   imageSrc,
   fileInfo,
   imageMetadata,
-  product,              // <-- NEW: extracted product data with bbox
-  highlightedField,     // <-- NEW: which field to emphasize (string or null)
-  onBoxClick,           // <-- NEW: callback when user clicks a box
+  product,
+  highlightedField,
+  onBoxClick,
   onRemove,
   onReplace,
 }) {
@@ -34,6 +34,9 @@ export default function ImagePreviewCard({
 
   const quality = imageMetadata?.quality_label || 'GOOD';
   const textVis = imageMetadata?.text_visibility || 'CLEAR';
+
+  const imgW = imageMetadata?.width || 900;
+  const imgH = imageMetadata?.height || 900;
 
   // Collect all bboxes to render as overlays
   const boxes = [];
@@ -79,20 +82,23 @@ export default function ImagePreviewCard({
       </div>
 
       {/* Image display with bounding-box overlay */}
-      <div className="p-4 flex flex-col md:flex-row gap-4 items-center">
-        <div className="relative w-full md:w-60 h-48 bg-slate-900 rounded-lg overflow-hidden flex items-center justify-center border border-slate-200 shrink-0">
+      <div className="p-4 flex flex-col md:flex-row gap-4 items-start">
+        {/* Fixed-aspect container: the image fills it, the SVG overlays 1:1 */}
+        <div
+          className="relative w-full md:w-64 bg-slate-900 rounded-lg overflow-hidden border border-slate-200 shrink-0"
+          style={{ aspectRatio: `${imgW} / ${imgH}` }}
+        >
           <img
             src={imageSrc}
             alt="Package Label"
-            className="w-full h-full object-contain"
+            className="absolute inset-0 w-full h-full object-fill"
           />
 
-          {/* Bounding-box overlay (SVG, scales with the image) */}
           {hasBoxes && (
             <svg
               className="absolute inset-0 w-full h-full pointer-events-none"
-              viewBox={`0 0 ${imageMetadata?.width || 900} ${imageMetadata?.height || 900}`}
-              preserveAspectRatio="xMidYMid meet"
+              viewBox={`0 0 ${imgW} ${imgH}`}
+              preserveAspectRatio="none"
             >
               {boxes.map(({ field, bbox, color }) => {
                 const [x1, y1, x2, y2] = bbox;
@@ -105,18 +111,18 @@ export default function ImagePreviewCard({
                       width={Math.max(1, x2 - x1)}
                       height={Math.max(1, y2 - y1)}
                       stroke={color}
-                      strokeWidth={isHighlighted ? 6 : 3}
+                      strokeWidth={isHighlighted ? 8 : 4}
                       fill={isHighlighted ? `${color}33` : 'transparent'}
                       className="pointer-events-auto cursor-pointer transition-all"
                       onClick={() => onBoxClick && onBoxClick(field)}
                     />
                     <text
                       x={x1 + 4}
-                      y={Math.max(14, y1 - 6)}
+                      y={Math.max(18, y1 - 6)}
                       fill={color}
-                      fontSize="14"
+                      fontSize="18"
                       fontWeight="bold"
-                      style={{ textShadow: '0 0 3px rgba(0,0,0,0.8)' }}
+                      style={{ textShadow: '0 0 4px rgba(0,0,0,0.9)' }}
                       className="pointer-events-none select-none"
                     >
                       {FIELD_LABELS[field]}
