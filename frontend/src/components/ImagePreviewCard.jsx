@@ -1,11 +1,52 @@
 import React from 'react';
 import { Image as ImageIcon, Trash2, RefreshCw, CheckCircle2, AlertCircle } from 'lucide-react';
 
-export default function ImagePreviewCard({ imageSrc, fileInfo, imageMetadata, onRemove, onReplace }) {
+// Color per field for the overlay boxes
+const FIELD_COLORS = {
+  manufacturer: '#10b981',      // emerald-500
+  quantity: '#3b82f6',           // blue-500
+  mrp: '#eab308',                // yellow-500
+  dates: '#a855f7',              // purple-500
+  consumer_care: '#f97316',      // orange-500
+  country_of_origin: '#ef4444',  // red-500
+};
+
+const FIELD_LABELS = {
+  manufacturer: 'Manufacturer',
+  quantity: 'Net Quantity',
+  mrp: 'MRP',
+  dates: 'Dates',
+  consumer_care: 'Consumer Care',
+  country_of_origin: 'Country of Origin',
+};
+
+export default function ImagePreviewCard({
+  imageSrc,
+  fileInfo,
+  imageMetadata,
+  product,              // <-- NEW: extracted product data with bbox
+  highlightedField,     // <-- NEW: which field to emphasize (string or null)
+  onBoxClick,           // <-- NEW: callback when user clicks a box
+  onRemove,
+  onReplace,
+}) {
   if (!imageSrc) return null;
 
   const quality = imageMetadata?.quality_label || 'GOOD';
   const textVis = imageMetadata?.text_visibility || 'CLEAR';
+
+  // Collect all bboxes to render as overlays
+  const boxes = [];
+  if (product) {
+    ['manufacturer', 'quantity', 'mrp', 'dates', 'consumer_care'].forEach((key) => {
+      const bbox = product[key]?.bbox;
+      if (Array.isArray(bbox) && bbox.length === 4) {
+        boxes.push({ field: key, bbox, color: FIELD_COLORS[key] });
+      }
+    });
+  }
+
+  const hasBoxes = boxes.length > 0;
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
@@ -37,7 +78,7 @@ export default function ImagePreviewCard({ imageSrc, fileInfo, imageMetadata, on
         </div>
       </div>
 
-      {/* Image display */}
+      {/* Image display with bounding-box overlay */}
       <div className="p-4 flex flex-col md:flex-row gap-4 items-center">
         <div className="relative w-full md:w-60 h-48 bg-slate-900 rounded-lg overflow-hidden flex items-center justify-center border border-slate-200 shrink-0">
           <img
@@ -45,6 +86,46 @@ export default function ImagePreviewCard({ imageSrc, fileInfo, imageMetadata, on
             alt="Package Label"
             className="w-full h-full object-contain"
           />
+
+          {/* Bounding-box overlay (SVG, scales with the image) */}
+          {hasBoxes && (
+            <svg
+              className="absolute inset-0 w-full h-full pointer-events-none"
+              viewBox={`0 0 ${imageMetadata?.width || 900} ${imageMetadata?.height || 900}`}
+              preserveAspectRatio="xMidYMid meet"
+            >
+              {boxes.map(({ field, bbox, color }) => {
+                const [x1, y1, x2, y2] = bbox;
+                const isHighlighted = highlightedField === field;
+                return (
+                  <g key={field}>
+                    <rect
+                      x={x1}
+                      y={y1}
+                      width={Math.max(1, x2 - x1)}
+                      height={Math.max(1, y2 - y1)}
+                      stroke={color}
+                      strokeWidth={isHighlighted ? 6 : 3}
+                      fill={isHighlighted ? `${color}33` : 'transparent'}
+                      className="pointer-events-auto cursor-pointer transition-all"
+                      onClick={() => onBoxClick && onBoxClick(field)}
+                    />
+                    <text
+                      x={x1 + 4}
+                      y={Math.max(14, y1 - 6)}
+                      fill={color}
+                      fontSize="14"
+                      fontWeight="bold"
+                      style={{ textShadow: '0 0 3px rgba(0,0,0,0.8)' }}
+                      className="pointer-events-none select-none"
+                    >
+                      {FIELD_LABELS[field]}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+          )}
         </div>
 
         {/* Metadata Details */}
@@ -86,6 +167,26 @@ export default function ImagePreviewCard({ imageSrc, fileInfo, imageMetadata, on
               </span>
             </div>
           </div>
+
+          {/* Legend */}
+          {hasBoxes && (
+            <div className="flex flex-wrap gap-2 text-[10px] pt-1">
+              {boxes.map(({ field, color }) => (
+                <button
+                  key={field}
+                  onClick={() => onBoxClick && onBoxClick(field)}
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full border transition-all ${
+                    highlightedField === field
+                      ? 'bg-slate-900 text-white border-slate-900 font-bold'
+                      : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full" style={{ background: color }} />
+                  {FIELD_LABELS[field]}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
