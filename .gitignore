@@ -42,3 +42,5 @@ yarn-error.log*
 .idea/
 .DS_Store
 Thumbs.db
+# Runtime data (changes every run; do not commit)
+backend/app/data/
