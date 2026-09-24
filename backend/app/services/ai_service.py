@@ -1,6 +1,7 @@
 """AI Extraction Service using Google Gemini via the official google-genai SDK."""
 import os
 import json
+import time
 import logging
 from typing import Optional
 from PIL import Image
@@ -130,7 +131,7 @@ return null rather than guessing.
    Do NOT infer the country from the manufacturer address, company name, brand name, website, phone number, barcode, or any other indirect information.
    If there is no explicit country-of-origin declaration visible on the package, return null.
 11. Extract raw_evidence array: For each detected field, include an object:
-    {"field": "<field_name>", "value": "<extracted_val>", "evidence": "<exact verbatim quote from package>"}
+    {"field": "<field_name>", "value": "<extracted_val>", "evidence": "<exact verbatim quote from package>", "bbox": [ymin, xmin, ymax, xmax]}
 
 12. Perform a complete visual scan of the ENTIRE package image before producing JSON.
 
@@ -207,6 +208,15 @@ return null rather than guessing.
 26. For manufacturer extraction, the declaration and company relationship must be visible together. For example, "Manufactured by ABC Foods" is valid evidence. A standalone company name or brand name is NOT sufficient evidence.
 
 27. If text is too small, blurry, cropped, folded, hidden, or unreadable, return null rather than reconstructing or guessing the text.
+
+28. BOUNDING BOXES: For EVERY field you extract that has a value (not null), you MUST also return a bounding box.
+    - The bounding box identifies the smallest rectangular region of the image where that declaration is visible.
+    - Use the key "bbox" inside each field's object.
+    - Format: [ymin, xmin, ymax, xmax] as integers normalized to a 0-1000 scale relative to the image dimensions.
+    - Example: if a label is in the top-left quarter of the image, ymin might be 50, xmin 20, ymax 200, xmax 400.
+    - If a field's value is null, set its bbox to null.
+    - For raw_evidence items, also include a bbox pointing to the exact text that was quoted.
+
 Output ONLY valid JSON matching this exact structure:
 {
   "product_name": null,
@@ -216,34 +226,39 @@ Output ONLY valid JSON matching this exact structure:
   "manufacturer": {
     "role": null,
     "name": null,
-    "address": null
+    "address": null,
+    "bbox": null
   },
   "quantity": {
     "value": null,
     "unit": null,
-    "raw_text": null
+    "raw_text": null,
+    "bbox": null
   },
   "mrp": {
     "value": null,
     "currency": "INR",
     "inclusive_of_taxes": null,
-    "raw_text": null
+    "raw_text": null,
+    "bbox": null
   },
   "dates": {
     "manufacture_date": null,
     "packing_date": null,
     "best_before": null,
-    "use_by": null
+    "use_by": null,
+    "bbox": null
   },
   "consumer_care": {
     "phone": null,
     "email": null,
-    "address": null
+    "address": null,
+    "bbox": null
   },
   "country_of_origin": null,
   "package_type": "normal",
   "raw_evidence": [
-    {"field": "mrp", "value": "80", "evidence": "MRP Rs. 80.00 (Incl. of all taxes)"}
+    {"field": "mrp", "value": "80", "evidence": "MRP Rs. 80.00 (Incl. of all taxes)", "bbox": [100, 200, 300, 400]}
   ]
 }
 """
@@ -253,10 +268,30 @@ PRIMARY_GEMINI_MODEL = "gemini-3.5-flash"
 CANDIDATE_GEMINI_MODELS = [
     "gemini-3.5-flash",
     "gemini-3.8-flash",
-    "gemini-2.5-flash-lite",
+    "gemini-flash-latest",
     "gemini-flash-lite-latest",
+    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
+    "gemini-2.5-flash-lite",
 ]
+
+# Retry settings for transient 503 overloads
+MAX_RETRY_ROUNDS = 3
+RETRY_BACKOFF_SECONDS = [0, 2, 5]
+
+
+def _convert_bbox_to_pixels(bbox_norm, img_w: int, img_h: int):
+    """Convert Gemini's 0-1000 normalized [ymin, xmin, ymax, xmax] to absolute pixels."""
+    if not bbox_norm or not isinstance(bbox_norm, (list, tuple)) or len(bbox_norm) != 4:
+        return None
+    try:
+        ymin = int(float(bbox_norm[0]) / 1000.0 * img_h)
+        xmin = int(float(bbox_norm[1]) / 1000.0 * img_w)
+        ymax = int(float(bbox_norm[2]) / 1000.0 * img_h)
+        xmax = int(float(bbox_norm[3]) / 1000.0 * img_w)
+        return [xmin, ymin, xmax, ymax]
+    except (ValueError, TypeError):
+        return None
 
 
 class AIService:
@@ -309,7 +344,7 @@ class AIService:
         if not api_key:
             raise ValueError("GEMINI_API_KEY environment variable is not configured.")
 
-        user_prompt = f"Extract all packaged commodity declarations from this label image accurately according to Legal Metrology standards."
+        user_prompt = f"Extract all packaged commodity declarations from this label image accurately according to Legal Metrology standards. Include bounding boxes for every detected field."
         if category_hint and category_hint.lower() != "auto detect":
             user_prompt += f" User indicated declared category is '{category_hint}'."
 
@@ -320,6 +355,9 @@ class AIService:
         import io
         import urllib.request
         import urllib.error
+
+        # Capture original dimensions before any conversion for bbox math
+        img_w, img_h = image.size
 
         try:
             if image.mode in ("RGBA", "P"):
@@ -340,84 +378,102 @@ class AIService:
         last_error = None
         models_to_try = [self.model_name] + [m for m in CANDIDATE_GEMINI_MODELS if m != self.model_name]
 
-        # 1. High-Performance Direct REST API
-        for model in models_to_try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-            payload = {
-                "contents": [
-                    {
-                        "parts": [
-                            {
-                                "inline_data": {
-                                    "mime_type": mime_type,
-                                    "data": img_b64,
-                                }
-                            },
-                            {"text": combined_prompt},
-                        ]
-                    }
-                ],
-                "generationConfig": {
-                    "temperature": 0.0,
-                    "response_mime_type": "application/json",
-                },
-            }
+        # Retry loop — handles transient 503 overloads from Gemini
+        for attempt in range(MAX_RETRY_ROUNDS):
+            if attempt > 0:
+                wait = RETRY_BACKOFF_SECONDS[attempt] if attempt < len(RETRY_BACKOFF_SECONDS) else 5
+                print(f"[AI Service] Retry round {attempt + 1}/{MAX_RETRY_ROUNDS} after {wait}s backoff...")
+                time.sleep(wait)
 
-            try:
-                print(f"[AI Service] Initiating Gemini Vision API call using model: {model}")
-                req = urllib.request.Request(
-                    url,
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                )
-                with urllib.request.urlopen(req, timeout=20) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    candidates = data.get("candidates", [])
-                    if not candidates:
-                        raise ValueError(f"No candidates returned by model {model}")
+            # 1. High-Performance Direct REST API
+            for model in models_to_try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+                payload = {
+                    "contents": [
+                        {
+                            "parts": [
+                                {
+                                    "inline_data": {
+                                        "mime_type": mime_type,
+                                        "data": img_b64,
+                                    }
+                                },
+                                {"text": combined_prompt},
+                            ]
+                        }
+                    ],
+                    "generationConfig": {
+                        "temperature": 0.0,
+                        "response_mime_type": "application/json",
+                    },
+                }
 
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if not parts:
-                        raise ValueError(f"No content parts in response from {model}")
+                try:
+                    print(f"[AI Service] Initiating Gemini Vision API call using model: {model}")
+                    req = urllib.request.Request(
+                        url,
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                    )
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                        candidates = data.get("candidates", [])
+                        if not candidates:
+                            raise ValueError(f"No candidates returned by model {model}")
 
-                    response_text = parts[0].get("text", "").strip()
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if not parts:
+                            raise ValueError(f"No content parts in response from {model}")
 
-                    # Clean markdown code fences if present
-                    if response_text.startswith("```json"):
-                        response_text = response_text[7:]
-                    if response_text.startswith("```"):
-                        response_text = response_text[3:]
-                    if response_text.endswith("```"):
-                        response_text = response_text[:-3]
+                        response_text = parts[0].get("text", "").strip()
 
-                    raw_json = json.loads(response_text.strip())
+                        # Clean markdown code fences if present
+                        if response_text.startswith("```json"):
+                            response_text = response_text[7:]
+                        if response_text.startswith("```"):
+                            response_text = response_text[3:]
+                        if response_text.endswith("```"):
+                            response_text = response_text[:-3]
 
-                    # Override/enrich category
-                    if category_hint and category_hint.lower() != "auto detect":
-                        if not raw_json.get("category"):
-                            raw_json["category"] = category_hint
+                        raw_json = json.loads(response_text.strip())
 
-                    # Ensure string types for quantity & mrp value
-                    if isinstance(raw_json.get("quantity"), dict) and "value" in raw_json["quantity"]:
-                        if raw_json["quantity"]["value"] is not None:
-                            raw_json["quantity"]["value"] = str(raw_json["quantity"]["value"])
-                    if isinstance(raw_json.get("mrp"), dict) and "value" in raw_json["mrp"]:
-                        if raw_json["mrp"]["value"] is not None:
-                            raw_json["mrp"]["value"] = str(raw_json["mrp"]["value"])
+                        # Override/enrich category
+                        if category_hint and category_hint.lower() != "auto detect":
+                            if not raw_json.get("category"):
+                                raw_json["category"] = category_hint
 
-                    product_data = ProductData(**raw_json)
-                    print(f"[AI Service] Successfully extracted product data using model '{model}'.")
-                    return product_data
+                        # Ensure string types for quantity & mrp value
+                        if isinstance(raw_json.get("quantity"), dict) and "value" in raw_json["quantity"]:
+                            if raw_json["quantity"]["value"] is not None:
+                                raw_json["quantity"]["value"] = str(raw_json["quantity"]["value"])
+                        if isinstance(raw_json.get("mrp"), dict) and "value" in raw_json["mrp"]:
+                            if raw_json["mrp"]["value"] is not None:
+                                raw_json["mrp"]["value"] = str(raw_json["mrp"]["value"])
 
-            except urllib.error.HTTPError as http_err:
-                error_body = http_err.read().decode("utf-8", errors="replace")
-                last_error = f"HTTP {http_err.code} on {model}: {error_body[:200]}"
-                print(f"[AI Service] Model '{model}' returned HTTP error: {last_error}")
-                continue
-            except Exception as e:
-                last_error = f"Error on {model}: {str(e)}"
-                print(f"[AI Service] Model '{model}' call failed: {last_error}")
-                continue
+                        # === Convert normalized bboxes (0-1000) to absolute pixels ===
+                        for field_key in ("manufacturer", "quantity", "mrp", "dates", "consumer_care"):
+                            field_obj = raw_json.get(field_key)
+                            if isinstance(field_obj, dict) and field_obj.get("bbox"):
+                                field_obj["bbox"] = _convert_bbox_to_pixels(field_obj["bbox"], img_w, img_h)
+
+                        if isinstance(raw_json.get("raw_evidence"), list):
+                            for item in raw_json["raw_evidence"]:
+                                if isinstance(item, dict) and item.get("bbox"):
+                                    item["bbox"] = _convert_bbox_to_pixels(item["bbox"], img_w, img_h)
+
+                        product_data = ProductData(**raw_json)
+                        print(f"[AI Service] Successfully extracted product data using model '{model}'.")
+                        return product_data
+
+                except urllib.error.HTTPError as http_err:
+                    error_body = http_err.read().decode("utf-8", errors="replace")
+                    last_error = f"HTTP {http_err.code} on {model}: {error_body[:200]}"
+                    print(f"[AI Service] Model '{model}' returned HTTP error: {last_error}")
+                    continue
+                except Exception as e:
+                    last_error = f"Error on {model}: {str(e)}"
+                    print(f"[AI Service] Model '{model}' call failed: {last_error}")
+                    continue
 
         logger.error(f"All Gemini extraction model attempts failed: {last_error}")
         raise ValueError(f"AI label extraction failed across models {models_to_try}: {str(last_error)}")

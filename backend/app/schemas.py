@@ -21,12 +21,14 @@ class ManufacturerInfo(BaseModel):
     role: Optional[str] = Field(default=None, description="Role e.g., 'Manufactured by', 'Packed by', 'Imported by'")
     name: Optional[str] = Field(default=None, description="Company / Business entity name")
     address: Optional[str] = Field(default=None, description="Complete registered/operational address")
+    bbox: Optional[List[int]] = Field(default=None, description="[xmin, ymin, xmax, ymax] in image pixels")
 
 
 class QuantityInfo(BaseModel):
     value: Optional[str] = Field(default=None, description="Numerical net quantity e.g., '200', '1.5'")
     unit: Optional[str] = Field(default=None, description="Standardized SI unit e.g., 'g', 'kg', 'ml', 'l', 'N'")
     raw_text: Optional[str] = Field(default=None, description="Verbatim text from label e.g., 'Net Wt. 200g'")
+    bbox: Optional[List[int]] = Field(default=None, description="[xmin, ymin, xmax, ymax] in image pixels")
 
 
 class MRPInfo(BaseModel):
@@ -34,6 +36,7 @@ class MRPInfo(BaseModel):
     currency: str = Field(default="INR", description="Currency symbol or code")
     inclusive_of_taxes: Optional[bool] = Field(default=None, description="Whether tax inclusive phrase is present")
     raw_text: Optional[str] = Field(default=None, description="Verbatim text from label e.g., 'MRP Rs. 80.00 (Incl. of all taxes)'")
+    bbox: Optional[List[int]] = Field(default=None, description="[xmin, ymin, xmax, ymax] in image pixels")
 
 
 class DateInfo(BaseModel):
@@ -41,18 +44,21 @@ class DateInfo(BaseModel):
     packing_date: Optional[str] = Field(default=None, description="Date or month/year of packing")
     best_before: Optional[str] = Field(default=None, description="Best before duration e.g., '6 months from pkd'")
     use_by: Optional[str] = Field(default=None, description="Expiry / use-by date")
+    bbox: Optional[List[int]] = Field(default=None, description="[xmin, ymin, xmax, ymax] in image pixels")
 
 
 class ConsumerCareInfo(BaseModel):
     phone: Optional[str] = Field(default=None, description="Toll-free / customer care phone number")
     email: Optional[str] = Field(default=None, description="Customer care email address")
     address: Optional[str] = Field(default=None, description="Consumer care postal address or website")
+    bbox: Optional[List[int]] = Field(default=None, description="[xmin, ymin, xmax, ymax] in image pixels")
 
 
 class EvidenceItem(BaseModel):
     field: str
     value: Optional[str] = None
     evidence: str
+    bbox: Optional[List[int]] = Field(default=None, description="[xmin, ymin, xmax, ymax] in image pixels")
 
 
 class ProductData(BaseModel):
