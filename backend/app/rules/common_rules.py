@@ -1,5 +1,5 @@
 """Deterministic compliance rules for Legal Metrology Packaged Commodities
-rules (LM-001 through LM-009).
+rules (LM-001 through LM-010).
 
 Architectural Rule:
 - Rules MUST be pure, deterministic functions receiving structured ProductData.
@@ -423,6 +423,46 @@ def check_lm_009_consumer_care(product: ProductData) -> RuleResult:
 
 
 # ============================================================
+# LM-010: Tamper / Occlusion Check (New)
+# ============================================================
+
+def check_lm_010_occlusion(product: ProductData) -> RuleResult:
+    """LM-010: Tamper / MRP Sticker Overlap Check."""
+    occlusion = getattr(product, "occlusion_findings", []) or []
+    citation = "Legal Metrology (PC) Rules 2011 — Rule 6(3) (Sticker/Tamper)"
+    
+    if occlusion:
+        # Find which specific fields are affected
+        affected_fields = set()
+        for f in occlusion:
+            field = f.get("field", "unknown")
+            if field == "manufacturer": affected_fields.add("Manufacturer Details")
+            elif field == "mrp": affected_fields.add("MRP")
+            elif field == "dates": affected_fields.add("Dates")
+            elif field == "consumer_care": affected_fields.add("Consumer Care")
+            else: affected_fields.add(field.capitalize())
+            
+        affected_str = ", ".join(sorted(affected_fields))
+        
+        return RuleResult(
+            rule_id="LM-010", rule_name="Tamper / Overlay Check", field="occlusion",
+            status=ComplianceStatus.FAIL, 
+            detected_value=f"Overlap detected on: {affected_str}",
+            evidence=f"A sticker-like rectangular region was detected overlapping mandatory declaration(s).",
+            reason=f"Possible MRP sticker or overlay covering original declaration. [{citation}]",
+            recommendation="Inspect physical package. Original declarations must not be obscured."
+        )
+        
+    return RuleResult(
+        rule_id="LM-010", rule_name="Tamper / Overlay Check", field="occlusion",
+        status=ComplianceStatus.PASS, detected_value="No occlusion detected",
+        evidence="No overlapping sticker-like regions found.",
+        reason=f"No tampering detected on mandatory declarations. [{citation}]",
+        recommendation=None
+    )
+
+
+# ============================================================
 # ALL LEGAL METROLOGY RULES
 # ============================================================
 
@@ -436,4 +476,5 @@ ALL_RULES = [
     check_lm_007_mrp,
     check_lm_008_mrp_tax_inclusive,
     check_lm_009_consumer_care,
+    check_lm_010_occlusion,  # <--- Added LM-010
 ]

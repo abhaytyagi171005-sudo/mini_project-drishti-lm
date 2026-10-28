@@ -21,6 +21,7 @@ from ..rules.rule_engine import rule_engine
 from .ai_service import ai_service
 from .storage_service import storage_service
 from ..utils.image_utils import validate_and_inspect_image
+from .occlusion_service import find_occlusions  # <--- Added for tamper detection
 
 logger = logging.getLogger(__name__)
 
@@ -215,11 +216,31 @@ class ComplianceService:
         if category_hint and category_hint.lower() not in ["auto detect", ""]:
             product_data.category = category_hint
 
-        # 3. Deterministic Compliance Rule Engine
+        # ============================================================
+        # 3. Occlusion / Tamper Detection (CV Layer 1)
+        # ============================================================
+        try:
+            # Only run if we have a real image and not a fallback demo mock
+            if not is_demo:
+                decl_bboxes = {
+                    "manufacturer": product_data.manufacturer.bbox if product_data.manufacturer else None,
+                    "mrp": product_data.mrp.bbox if product_data.mrp else None,
+                    "dates": product_data.dates.bbox if product_data.dates else None,
+                    "consumer_care": product_data.consumer_care.bbox if product_data.consumer_care else None,
+                }
+                occlusions = find_occlusions(image_bytes, decl_bboxes)
+                product_data.occlusion_findings = occlusions
+                if occlusions:
+                    print(f"[Tamper] Detected {len(occlusions)} possible sticker overlap(s).")
+        except Exception as e:
+            print(f"[Tamper] Skipped due to error: {e}")
+            product_data.occlusion_findings = []
+
+        # 4. Deterministic Compliance Rule Engine
         # Pure algorithmic compliance evaluation
         checks, summary, overall_status, score = rule_engine.evaluate(product_data)
 
-        # 4. Generate Response & Save
+        # 5. Generate Response & Save
         inspection_id = generate_inspection_id()
         created_at = datetime.now().isoformat()
 

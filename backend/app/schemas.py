@@ -59,7 +59,7 @@ class EvidenceItem(BaseModel):
     value: Optional[str] = None
     evidence: str
     bbox: Optional[List[int]] = Field(default=None, description="[xmin, ymin, xmax, ymax] in image pixels")
-
+    
 
 class ProductData(BaseModel):
     """Structured container extracted by AI from package label."""
@@ -74,6 +74,7 @@ class ProductData(BaseModel):
     consumer_care: Optional[ConsumerCareInfo] = Field(default_factory=ConsumerCareInfo)
     country_of_origin: Optional[str] = Field(default=None, description="Country of manufacture / origin")
     package_type: Optional[str] = Field(default="normal", description="Package type e.g., normal, combo, wholesale")
+    occlusion_findings: List[Dict[str, Any]] = Field(default_factory=list, description="Detected sticker/occlusion regions overlapping declarations")
     raw_evidence: List[EvidenceItem] = Field(default_factory=list, description="Verbatim evidence snippets for auditability")
 
 
